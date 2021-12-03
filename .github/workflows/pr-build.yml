@@ -1,0 +1,98 @@
+---
+name: Pull request build
+
+on:
+  pull_request_target:
+    branches:
+      - master
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    name: Lint project
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Lint sources
+        uses: docker://ghcr.io/github/super-linter:slim-v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VALIDATE_ALL_CODEBASE: false
+          IGNORE_GITIGNORED_FILES: true
+          IGNORE_GENERATED_FILES: true
+          VALIDATE_DOCKERFILE: true
+          VALIDATE_EDITORCONFIG: true
+          VALIDATE_GITHUB_ACTIONS: true
+          VALIDATE_MARKDOWN: true
+          VALIDATE_SHELL_SHFMT: true
+          VALIDATE_YAML: true
+
+  build:
+    needs: [lint]
+    runs-on: ubuntu-latest
+    name: Validate code
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2.4.0
+        with:
+          fetch-depth: 0
+
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Determine version and create changelog
+        id: bumper
+        uses: tomerfi/version-bumper-action@1.0.2
+        with:
+          changelog: true
+          preset: conventionalcommits
+          folder: ./
+
+      - name: Update Cargo Version
+        uses: ciiiii/toml-editor@1.0.0
+        with:
+          file: "./Cargo.toml"
+          key: "package.version"
+          value: "${{ steps.bumper.outputs.new_version }}"
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          override: true
+
+      - uses: actions-rs/audit-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+
+      - name: Run cargo-tarpaulin
+        uses: actions-rs/tarpaulin@v0.1
+        with:
+          version: "0.15.0"
+          args: "-- --test-threads 1"
+
+      - name: Upload to codecov.io
+        uses: codecov/codecov-action@v1.0.2
+        with:
+          token: ${{secrets.CODECOV_TOKEN}}
+
+      - name: Archive code coverage results
+        uses: actions/upload-artifact@v1
+        with:
+          name: code-coverage-report
+          path: cobertura.xml
